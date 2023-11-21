@@ -1,0 +1,49 @@
+---
+title: "p8105_hw6_zl3386"
+author: "Ziqiu Liu"
+date: "2023-11-21"
+output: github_document
+---
+
+```{r, message = FALSE}
+library(tidyverse)
+library(rvest)
+library(readr)
+```
+
+## Problem 1
+
+```{r import data}
+homicide_df = 
+  read_csv("data/homicide-data.csv") |>
+  mutate(
+    victim_age = as.numeric(victim_age),
+    state = toupper(state)
+  ) |>
+  mutate(
+    # create a `city_state` variable
+    city_state = paste(city, ",", state),
+    # a binary variable indicating whether the homicide is solved
+    solved_status = case_match( 
+      disposition,
+      "Closed by arrest" ~ 1,
+      c("Closed without arrest", "Open/No arrest") ~ 0,
+    )
+  ) |>
+  # Omit cities that don’t report victim race and Tulsa, AL
+  filter(!(city_state %in% c("Dallas , TX", "Phoenix , AZ", "Kansas City , MO"))) |> 
+  filter(city_state != "Tulsa , AL") |>
+  # limit to white or black victim_race
+  filter(victim_race %in% c("White", "Black"))
+```
+
+For the city of Baltimore, MD, use the `glm` function to fit a logistic regression with resolved vs unresolved as the outcome and victim age, sex and race as predictors.
+
+Save the output of `glm` as an R object; apply the `broom::tidy` to this object; and obtain the estimate and confidence interval of the adjusted **odds ratio** for solving homicides comparing male victims to female victims keeping all other variables fixed.
+
+```{r}
+baltimore_df = homicide_df |>
+  filter(city_state == "Baltimore , MD") |>
+  select(solved_status, victim_age, victim_sex, victim_race) 
+```
+
