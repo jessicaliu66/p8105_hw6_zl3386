@@ -9,6 +9,9 @@ output: github_document
 library(tidyverse)
 library(rvest)
 library(readr)
+library(modelr)
+
+set.seed(123)
 ```
 
 ## Problem 1
@@ -100,4 +103,200 @@ or_df |>
 * Albuquerque, NM is the only city with an OR significantly larger than null value (1), which means homicides with male victim are significantly more likely to be resolved than those with female victim.
 
 
+## Problem 2
 
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2022-01-01",
+    date_max = "2022-12-31") |>
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) |>
+  select(name, id, everything())
+```
+
+We’ll focus on a simple linear regression with `tmax` as the response with `tmin` and `prcp` as the predictors,
+
+Use 5000 bootstrap samples and, for each bootstrap sample, produce estimates of $\hat{r}^2$ and $log (\hat{β}_1 * \hat{β}_2)$.
+
+```{r}
+# bootstrap function
+boot_sample = function(df) {
+  
+  sample_frac(df, replace = TRUE) 
+  # draw a sample with 100% size, with replacement each time
+  
+}
+
+# draw the 5000 samples
+boot_straps =
+  tibble(strap_number = 1:5000) |>
+  mutate(
+    strap_sample = map(strap_number, \(i) boot_sample(weather_df))
+  )
+
+# do the `lm` fit
+boot_results =
+  boot_straps |>
+  mutate(
+    # map each sample to lm() to get linear models
+    models = map(strap_sample, \(df) lm(tmax ~ tmin + prcp, data = df)), 
+    glance = map(models, broom::glance),
+    results = map(models, broom::tidy),
+    r_squared = map(glance, \(df) pull(df, r.squared)),
+    log_b1b2 = map(results, \(df) log(abs(df$estimate[2] * df$estimate[3])))
+  ) |>
+  select(strap_number, r_squared, log_b1b2) |>
+  mutate(
+    r_squared = as.numeric(r_squared),
+    log_b1b2 = as.numeric(log_b1b2)
+  )
+```
+
+* Since $\hat{β}_1 * \hat{β}_2$ may be non-positive, we use `abs()` to take its absolute value and calculate $log (| \hat{β}_1 * \hat{β}_2 |)$ instead.
+
+Plot the distribution of the estimates, and describe these in words.
+
+```{r}
+boot_results |>
+  ggplot(aes(x = r_squared)) +
+  geom_density() +
+  labs(title = "Distribution of r_hat_squared")
+
+boot_results |>
+  ggplot(aes(x = log_b1b2)) +
+  geom_density() +
+  labs(title = "Distribution of log(b1_hat * b2_hat)")
+```
+
+* The $\hat{r}^2$ distribution is concentrated near 0.92, which means the model explains a large proportion of the variance in the response variable `tmax`.
+
+* The $\hat{β}_1 * \hat{β}_2$ distribution is concentrated near -5 but has a heavy tail extending to low values, which may be related to the frequency with which large outliers are included in the bootstrap sample..
+
+
+Using the 5000 bootstrap estimates, identify the 2.5% and 97.5% quantiles to provide a 95% confidence interval for $\hat{r}^2$ and $log (\hat{β}_1 * \hat{β}_2)$.
+
+```{r}
+r_squared_lower = quantile(pull(boot_results, r_squared), 0.025) |> round(3)
+r_squared_upper = quantile(pull(boot_results, r_squared), 0.975) |> round(3)
+log_b1b2_lower = quantile(pull(boot_results, log_b1b2), 0.025) |> round(3)
+log_b1b2_upper = quantile(pull(boot_results, log_b1b2), 0.975) |> round(3)
+```
+
+* The 95% CI for $\hat{r}^2$ is (`r r_squared_lower`, `r r_squared_upper`).
+
+* The 95% CI for $log (\hat{β}_1 * \hat{β}_2)$ is (`r log_b1b2_lower`, `r log_b1b2_upper`).
+
+
+## Problem 3
+
+Analyze data gathered to understand the effects of several variables on a child’s birthweight. Load and clean the data for regression analysis.
+
+```{r}
+birthwt_df = 
+  read_csv("data/birthweight.csv") |>
+  janitor::clean_names() |>
+  # convert numeric to character
+  mutate(
+    babysex = case_match(
+      babysex,
+      1 ~ "male",
+      2 ~ "female",
+      ),
+    frace = case_match(
+      frace,
+      1 ~ "White",
+      2 ~ "Black",
+      3 ~ "Asian",
+      4 ~ "Puerto Rican",
+      8 ~ "Other",
+      9 ~ "Unknown"
+      ),
+    mrace = case_match(
+      mrace,
+      1 ~ "White",
+      2 ~ "Black",
+      3 ~ "Asian",
+      4 ~ "Puerto Rican",
+      8 ~ "Other",
+      9 ~ "Unknown"
+      )
+  )
+
+# check for missing data
+is.na(birthwt_df) |> colSums() # no missing data
+```
+
+Propose a regression model for birthweight. Describe your modeling process and show a plot of model residuals against fitted values.
+
+```{r}
+summary(birthwt_df)
+
+# exclude pnumlbw and pnumsga because all 0
+
+test_fit =
+  birthwt_df |>
+  lm(bwt ~ babysex + bhead + blength + delwt + fincome + frace + gaweeks + malform + menarche + mheight + momage + mrace + parity + ppbmi + ppwt + smoken + wtgain, data = _) |>
+  broom::tidy() |>
+  filter(p.value < 0.01)
+
+my_fit = 
+  birthwt_df |>
+  lm(bwt ~ bhead + blength + smoken, data = _)
+```
+
+* We choose `bhead`, `blength` and `smoken` as the predictors, because these three have the largest absolute coefficient estimate (`bhead` and `blength` positive, `smoken` negative) and smallest p-value (< 0.01).
+
+```{r}
+birthwt_df |>
+  modelr::add_residuals(my_fit) |> 
+  mutate(
+    pred = modelr::add_predictions(birthwt_df, my_fit) |> pull(pred)
+  ) |> 
+  ggplot(aes(x = pred, y = resid)) + 
+  geom_point() +
+  labs(title = "Residuals vs fitted values")
+```
+
+* We can see that for most of the fitted values, residuals spread randomly around zero. However, the residual distribution is skewed and has some extremely large outliers at small fitted value (<1000). This may suggest that the model is still missing some important variables.
+
+Compare the model to two others:
+
+* One using length at birth and gestational age as predictors (main effects only)
+
+* One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+
+```{r}
+cv_df =
+  crossv_mc(birthwt_df, 100) |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)) |>
+  mutate(
+    mod_my = map(train, \(df) lm(bwt ~ bhead + blength + smoken, data = df)),
+    mod_1 = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+    mod_2 = map(train, \(df) lm(bwt ~ bhead + blength + babysex + bhead*blength + bhead*babysex + blength*babysex, data = df)) 
+  )|> 
+  mutate(
+    rmse_my = map2_dbl(mod_my, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_1 = map2_dbl(mod_1, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_2 = map2_dbl(mod_2, test, \(mod, df) rmse(model = mod, data = df))
+  ) 
+
+cv_df |>
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + 
+  geom_violin()
+```
+
+* From the plot, we can see that the performance of our model (using head circumference, length and cigarettes smoked per day, main effects only) and the second model (using head circumference, length, sex, and all interactions) are similar, while both are significantly better than the first model (using length at birth and gestational age, main effects only).
